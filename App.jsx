@@ -87,8 +87,12 @@ export default function App(){
 
   // real winner of an auto game if the result is already in (from status feed)
   function autoRealWinner(g){
+    // Paraguay-France hasn't finished yet, but per commissioner decision assume France advances
+    // so the QF bracket populates now.
+    const key=[g.a,g.b].sort().join("|");
+    if(key===["France","Paraguay"].sort().join("|")) return "France";
     if(!status) return null;
-    const m=(status.matches||[]).find(x=>[x.home,x.away].sort().join("|")===[g.a,g.b].sort().join("|"));
+    const m=(status.matches||[]).find(x=>[x.home,x.away].sort().join("|")===key);
     if(!m || m.status!=="completed") return null;
     if(m.homeScore==null||m.awayScore==null) return null;
     if(m.homeScore!==m.awayScore) return m.homeScore>m.awayScore?m.home:m.away;
