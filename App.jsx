@@ -14,17 +14,18 @@ const FLAG = {
   "Uzbekistan":"🇺🇿","DR Congo":"🇨🇩","England":"🏴","Croatia":"🇭🇷","Panama":"🇵🇦","Ghana":"🇬🇭",
 };
 
-// The REAL Round of 16 matchups (correct FIFA tree), in bracket order (M89..M96).
-// Two are auto-awarded to everyone (already underway) and NOT re-picked.
+// The REAL Round of 16 matchups (correct FIFA tree), in bracket order.
+// The two July 4 games are auto-awarded to everyone (already played/underway) and NOT picked.
+// The other six are real, known matchups (their R32 feeders are decided) and ARE picked.
 const R16 = [
-  { a:"Paraguay", b:"France",  auto:false },   // M89
-  { a:"Canada",   b:"Morocco", auto:true  },   // M90 — AUTO-AWARDED
-  { a:"Brazil",   b:"Norway",  auto:false },   // M91
-  { a:"Mexico",   b:"England", auto:false },   // M92
-  { a:"Portugal", b:"Spain",   auto:false },   // M93
-  { a:"United States", b:"Belgium", auto:false }, // M94
-  { a:"Australia/Egypt-winner", b:"Argentina/Cape Verde-winner", auto:false, tbdA:["Australia","Egypt"], tbdB:["Argentina","Cape Verde"] }, // M95
-  { a:"Switzerland", b:"Colombia/Ghana-winner", auto:false, tbdB:["Colombia","Ghana"] }, // M96
+  { a:"Paraguay", b:"France",  auto:true  },   // July 4 — AUTO-AWARDED
+  { a:"Canada",   b:"Morocco", auto:true  },   // July 4 — AUTO-AWARDED
+  { a:"Brazil",   b:"Norway",  auto:false },   // July 5
+  { a:"Mexico",   b:"England", auto:false },   // July 6
+  { a:"Portugal", b:"Spain",   auto:false },   // July 6
+  { a:"United States", b:"Belgium", auto:false }, // July 7
+  { a:"Argentina", b:"Egypt",  auto:false },   // July 7
+  { a:"Switzerland", b:"Colombia", auto:false }, // July 7
 ];
 
 const C = { ink:"#0E1B2A", paper:"#F4EFE6", grass:"#0B6E4F", grassDk:"#084d37",
@@ -84,12 +85,22 @@ export default function App(){
   const r16PickNeeded = R16.map((g,i)=>({g,i})).filter(x=>!x.g.auto);
   const r16Done = r16PickNeeded.every(x=> r16[x.i] || lockedFor(x.g));
 
-  // QF matchups: pair R16 winners (index order). For auto games, user picks the auto team? 
-  // Simplify: QF uses whichever team advanced per this user's R16 choices; auto game -> user still
-  // chooses at QF from the two auto teams (Canada/Morocco) since result may not be final.
+  // real winner of an auto game if the result is already in (from status feed)
+  function autoRealWinner(g){
+    if(!status) return null;
+    const m=(status.matches||[]).find(x=>[x.home,x.away].sort().join("|")===[g.a,g.b].sort().join("|"));
+    if(!m || m.status!=="completed") return null;
+    if(m.homeScore==null||m.awayScore==null) return null;
+    if(m.homeScore!==m.awayScore) return m.homeScore>m.awayScore?m.home:m.away;
+    // penalties
+    if(m.homePens!=null&&m.awayPens!=null) return m.homePens>m.awayPens?m.home:m.away;
+    return null;
+  }
+
+  // For QF path: auto games use the real winner if known; otherwise the user's chooser value.
   function r16Adv(i){
     const g=R16[i];
-    if(g.auto){ return qf[`auto${i}`] || null; } // let them choose the auto team for downstream
+    if(g.auto){ return autoRealWinner(g) || qf[`auto${i}`] || null; }
     return r16[i]||null;
   }
   const qfGames = pairWinners(r16Adv,8);
