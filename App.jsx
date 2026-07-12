@@ -2,30 +2,21 @@ import React, { useState, useEffect } from "react";
 
 const API = import.meta.env.VITE_API_URL || "";
 
-const FLAG = {
-  "Mexico":"🇲🇽","South Korea":"🇰🇷","South Africa":"🇿🇦","Czechia":"🇨🇿","Canada":"🇨🇦",
-  "Switzerland":"🇨🇭","Qatar":"🇶🇦","Bosnia-Herzegovina":"🇧🇦","Brazil":"🇧🇷","Morocco":"🇲🇦",
-  "Scotland":"🏴","Haiti":"🇭🇹","United States":"🇺🇸","Paraguay":"🇵🇾","Australia":"🇦🇺",
-  "Türkiye":"🇹🇷","Germany":"🇩🇪","Ecuador":"🇪🇨","Ivory Coast":"🇨🇮","Curaçao":"🇨🇼",
-  "Netherlands":"🇳🇱","Japan":"🇯🇵","Tunisia":"🇹🇳","Sweden":"🇸🇪","Belgium":"🇧🇪","Iran":"🇮🇷",
-  "Egypt":"🇪🇬","New Zealand":"🇳🇿","Spain":"🇪🇸","Uruguay":"🇺🇾","Saudi Arabia":"🇸🇦",
-  "Cape Verde":"🇨🇻","France":"🇫🇷","Senegal":"🇸🇳","Norway":"🇳🇴","Iraq":"🇮🇶","Argentina":"🇦🇷",
-  "Austria":"🇦🇹","Algeria":"🇩🇿","Jordan":"🇯🇴","Portugal":"🇵🇹","Colombia":"🇨🇴",
-  "Uzbekistan":"🇺🇿","DR Congo":"🇨🇩","England":"🏴","Croatia":"🇭🇷","Panama":"🇵🇦","Ghana":"🇬🇭",
-};
+const FLAG = { "France":"🇫🇷", "Spain":"🇪🇸", "Argentina":"🇦🇷" };
+// England uses a subdivision flag emoji that shows as a black box on many devices,
+// so render a reliable text badge for it instead.
+const SUBDIV = { "England":"ENG" };
+function Flag({team}){
+  if (SUBDIV[team]) return <span style={{fontSize:12,fontWeight:800,letterSpacing:.5,color:"#fff",background:"#C8472E",borderRadius:4,padding:"2px 6px"}}>{SUBDIV[team]}</span>;
+  return <span style={{fontSize:22}}>{FLAG[team]||"·"}</span>;
+}
 
-// The REAL Round of 16 matchups (correct FIFA tree), in bracket order.
-// The two July 4 games are auto-awarded to everyone (already played/underway) and NOT picked.
-// The other six are real, known matchups (their R32 feeders are decided) and ARE picked.
-const R16 = [
-  { a:"Paraguay", b:"France",  auto:true  },   // July 4 — AUTO-AWARDED
-  { a:"Canada",   b:"Morocco", auto:true  },   // July 4 — AUTO-AWARDED
-  { a:"Brazil",   b:"Norway",  auto:false },   // July 5
-  { a:"Mexico",   b:"England", auto:false },   // July 6
-  { a:"Portugal", b:"Spain",   auto:false },   // July 6
-  { a:"United States", b:"Belgium", auto:false }, // July 7
-  { a:"Argentina", b:"Egypt",  auto:false },   // July 7
-  { a:"Switzerland", b:"Colombia", auto:false }, // July 7
+// The real semifinals on the correct tree (all four teams known):
+//  SF1: France v Spain     SF2: England v Argentina
+// Final: SF1 winner v SF2 winner.
+const SF = [
+  { key:"sf1", a:"France", b:"Spain" },
+  { key:"sf2", a:"England", b:"Argentina" },
 ];
 
 const C = { ink:"#0E1B2A", paper:"#F4EFE6", grass:"#0B6E4F", grassDk:"#084d37",
@@ -36,295 +27,182 @@ const F_BODY="'DM Sans',system-ui,sans-serif";
 export default function App(){
   const [me,setMe] = useState("");
   const [phone,setPhone] = useState("");
-  const [step,setStep] = useState("id"); // id -> r16 -> qf -> sf -> final -> done
-  const [r16,setR16] = useState({});   // matchIndex -> winner (only non-auto games)
-  const [qf,setQf] = useState({});
-  const [sf,setSf] = useState({});
-  const [final,setFinal] = useState({});
-  const [status,setStatus] = useState(null); // repickstatus (which games locked)
-  const [submitting,setSubmitting] = useState(false);
+  const [step,setStep] = useState("id"); // id -> pick -> done
+  const [sf,setSf] = useState({});       // sf1/sf2 -> winner
+  const [champ,setChamp] = useState(null);
+  const [status,setStatus] = useState("");
+  const [locked,setLocked] = useState(false);
 
-  useEffect(()=>{ try{
-    const raw=localStorage.getItem("tlfkatl_repick_draft");
-    if(raw){const d=JSON.parse(raw);setMe(d.me||"");setPhone(d.phone||"");
-      setR16(d.r16||{});setQf(d.qf||{});setSf(d.sf||{});setFinal(d.final||{});}
-  }catch(e){} },[]);
-  useEffect(()=>{ try{
-    localStorage.setItem("tlfkatl_repick_draft",JSON.stringify({me,phone,r16,qf,sf,final}));
-  }catch(e){} },[me,phone,r16,qf,sf,final]);
+  useEffect(()=>{
+    const saved = localStorage.getItem("tlfkatl_me");
+    if(saved){ try{ const o=JSON.parse(saved); setMe(o.name||""); setPhone(o.phone||""); }catch{} }
+    const draft = localStorage.getItem("tlfkatl_semis_draft");
+    if(draft){ try{ const o=JSON.parse(draft); setSf(o.sf||{}); setChamp(o.champ||null); }catch{} }
+    // check whether SF1 (earliest game) has kicked off -> lock
+    fetch(`${API}/knockout`).then(r=>r.json()).then(k=>{
+      const ko=k.koByPair||{};
+      const anySF = Object.values(ko).some(g=>g.round && g.round.toLowerCase().startsWith("semi") && g.status!=="scheduled");
+      if(anySF) setLocked(true);
+    }).catch(()=>{});
+  },[]);
 
-  useEffect(()=>{ fetch(`${API}/repickstatus`).then(r=>r.json()).then(setStatus).catch(()=>{}); },[]);
+  useEffect(()=>{
+    localStorage.setItem("tlfkatl_semis_draft", JSON.stringify({sf,champ}));
+  },[sf,champ]);
 
-  // resolve a team label for a game (handles TBD winners we don't know yet)
-  function teamLabel(g,side){
-    const base = side==="a"?g.a:g.b;
-    return base;
-  }
+  // The two possible finalists come from the SF picks
+  const finalists = [sf.sf1, sf.sf2].filter(Boolean);
+  const canSubmit = sf.sf1 && sf.sf2 && champ && finalists.includes(champ);
 
-  // R16 games the user actually picks (exclude auto). Also mark locked if kicked off.
-  function lockedFor(g){
-    if(!status) return false;
-    const m=(status.matches||[]).find(x=>{
-      const k=[x.home,x.away].sort().join("|");
-      return k===[g.a,g.b].sort().join("|");
+  function pickSF(key,team){
+    setSf(prev=>{
+      const next={...prev,[key]:team};
+      // if champion was the team no longer available, clear it
+      const fs=[next.sf1,next.sf2].filter(Boolean);
+      if(champ && !fs.includes(champ)) setChamp(null);
+      return next;
     });
-    if(!m||!m.datetime) return false;
-    return Date.now() >= new Date(m.datetime).getTime();
   }
-
-  // derived QF/SF/Final matchups from R16 winners (correct tree: adjacent pairs)
-  function r16Winner(i){ const g=R16[i]; if(g.auto) return "AUTO"; return r16[i]||null; }
-  // For QF, we need actual advancing teams. Auto games: winner known from results? We keep it simple:
-  // the re-pick only needs the user to choose among teams THEY advance. For auto games the real
-  // winner will be filled by scoring; here we let them pick QF from their own R16 winners.
-  function pairWinners(getter,n){
-    const arr=[]; for(let i=0;i<n;i++) arr.push(getter(i));
-    const out=[]; for(let i=0;i<arr.length;i+=2) out.push([arr[i],arr[i+1]]); return out;
-  }
-
-  const r16PickNeeded = R16.map((g,i)=>({g,i})).filter(x=>!x.g.auto);
-  const r16Done = r16PickNeeded.every(x=> r16[x.i] || lockedFor(x.g));
-
-  // real winner of an auto game if the result is already in (from status feed)
-  function autoRealWinner(g){
-    // Paraguay-France hasn't finished yet, but per commissioner decision assume France advances
-    // so the QF bracket populates now.
-    const key=[g.a,g.b].sort().join("|");
-    if(key===["France","Paraguay"].sort().join("|")) return "France";
-    if(!status) return null;
-    const m=(status.matches||[]).find(x=>[x.home,x.away].sort().join("|")===key);
-    if(!m || m.status!=="completed") return null;
-    if(m.homeScore==null||m.awayScore==null) return null;
-    if(m.homeScore!==m.awayScore) return m.homeScore>m.awayScore?m.home:m.away;
-    // penalties
-    if(m.homePens!=null&&m.awayPens!=null) return m.homePens>m.awayPens?m.home:m.away;
-    return null;
-  }
-
-  // For QF path: auto games use the real winner if known; otherwise the user's chooser value.
-  function r16Adv(i){
-    const g=R16[i];
-    if(g.auto){ return autoRealWinner(g) || qf[`auto${i}`] || null; }
-    return r16[i]||null;
-  }
-  const qfGames = pairWinners(r16Adv,8);
-  const qfDone = qfGames.every((g,i)=> (g[0]&&g[1]) ? qf[i] : true);
-
-  function qfAdv(i){ return qf[i]||null; }
-  const sfGames = pairWinners(qfAdv,4);
-  const sfDone = sfGames.every((g,i)=> (g[0]&&g[1]) ? sf[i] : true);
-
-  function sfAdv(i){ return sf[i]||null; }
-  const finalGames = pairWinners(sfAdv,2);
-  const finalDone = finalGames.every((g,i)=> (g[0]&&g[1]) ? final[i] : true);
 
   async function submit(){
-    if(submitting) return;
-    setSubmitting(true);
-    // build bracket2 payload with real matchups
+    if(!canSubmit) return;
+    setStatus("saving");
     const bracket = {
-      r16: R16.map((g,i)=>({ match:[g.a,g.b], pick: g.auto ? null : (r16[i]||null), auto:!!g.auto })),
-      qf:  qfGames.map((m,i)=>({ match:m, pick: qf[i]||null })),
-      sf:  sfGames.map((m,i)=>({ match:m, pick: sf[i]||null })),
-      final: finalGames.map((m,i)=>({ match:m, pick: final[i]||null })),
-      champion: final[0]||null,
+      sf: [
+        { pick: sf.sf1, match:["France","Spain"] },
+        { pick: sf.sf2, match:["England","Argentina"] },
+      ],
+      final: [{ pick: champ, match:[sf.sf1, sf.sf2] }],
+      champion: champ,
     };
     try{
-      const res=await fetch(`${API}/bracket2`,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({username:me.trim(),phone:phone.trim(),bracket,submittedAt:Date.now()}),
+      const res = await fetch(`${API}/bracket3`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ username: me, phone, bracket }),
       });
-      if(!res.ok){ const j=await res.json().catch(()=>({})); throw new Error(j.error||"save"); }
-      localStorage.removeItem("tlfkatl_repick_draft");
+      if(!res.ok) throw new Error("save failed");
+      localStorage.setItem("tlfkatl_me", JSON.stringify({name:me,phone}));
       setStep("done");
-    }catch(e){ alert(e.message==="save"?"Couldn't save — try again.":e.message); }
-    finally{ setSubmitting(false); }
+    }catch(e){ setStatus("error"); }
   }
 
-  return (
-    <div style={{fontFamily:F_BODY,color:C.ink,background:C.paper,minHeight:"100vh",
-      maxWidth:430,margin:"0 auto",paddingBottom:96}}>
-      <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"/>
-      <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-        @keyframes rise{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}.sec{animation:rise .25s ease}`}</style>
+  const wrap = { maxWidth:520, margin:"0 auto", padding:"18px 16px 60px", fontFamily:F_BODY, color:C.ink };
 
-      <div style={{padding:"18px 16px 8px",textAlign:"center"}}>
-        <div style={{fontFamily:F_DISP,fontSize:30,letterSpacing:1}}>TLFKATL</div>
-        <div style={{color:C.grass,fontWeight:700,letterSpacing:2.5,fontSize:10.5,marginTop:2}}>BRACKET RE-PICK · R16 →</div>
-      </div>
-
-      <div style={{padding:"4px 16px"}}>
-        {step==="id" && <Identify me={me} setMe={setMe} phone={phone} setPhone={setPhone}/>}
-        {step==="r16" && <R16Picker R16={R16} r16={r16} setR16={setR16} lockedFor={lockedFor}/>}
-        {step==="qf" && <RoundPicker title="Quarterfinals" sub="18 pts each" games={qfGames}
-          picks={qf} setPick={(i,t)=>setQf({...qf,[i]:t})} autoNote/>}
-        {step==="sf" && <RoundPicker title="Semifinals" sub="30 pts each" games={sfGames}
-          picks={sf} setPick={(i,t)=>setSf({...sf,[i]:t})}/>}
-        {step==="final" && <RoundPicker title="The Final" sub="52 pts · your champion" games={finalGames}
-          picks={final} setPick={(i,t)=>setFinal({...final,[i]:t})} champion/>}
-        {step==="done" && <Done me={me} champ={final[0]}/>}
-      </div>
-
-      {step!=="done" && (
-        <Footer step={step}
-          canNext={
-            step==="id" ? (me.trim().length>=2 && phone.trim().length>=7) :
-            step==="r16" ? r16Done : step==="qf" ? qfDone : step==="sf" ? sfDone : finalDone
-          }
-          submitting={submitting}
-          back={()=>setStep(prev(step))}
-          next={()=>{ step==="final" ? submit() : setStep(next(step)); }}
-        />
-      )}
-    </div>
-  );
-}
-
-const ORDER=["id","r16","qf","sf","final"];
-function next(s){ return ORDER[Math.min(ORDER.length-1,ORDER.indexOf(s)+1)]; }
-function prev(s){ return ORDER[Math.max(0,ORDER.indexOf(s)-1)]; }
-
-function Identify({me,setMe,phone,setPhone}){
-  return (
-    <div className="sec" style={{paddingTop:16}}>
-      <div style={{textAlign:"center",fontSize:44,marginBottom:6}}>🔁</div>
-      <h2 style={{fontFamily:F_DISP,fontSize:30,textAlign:"center",margin:"0 0 6px",letterSpacing:.5}}>RE-PICK YOUR BRACKET</h2>
-      <p style={{textAlign:"center",color:C.mute,fontSize:13.5,lineHeight:1.5,margin:"0 0 16px"}}>
-        The original bracket had the wrong Round of 16 matchups, so we're re-doing R16 onward on the correct bracket. Your Round of 32 points are locked in and unaffected.
-      </p>
-      <div style={{background:"#fff",border:`1px solid ${C.line}`,borderRadius:14,padding:"12px 15px",marginBottom:16,fontSize:12.5,color:C.mute,lineHeight:1.5}}>
-        <b style={{color:C.ink}}>Note:</b> Canada v Morocco and Paraguay v France already kicked off, so everyone gets those 10 pts automatically — you won't pick them.
-      </div>
-      <div style={{background:"#fff",border:`1px solid ${C.line}`,borderRadius:16,padding:18}}>
-        <Label>USERNAME</Label>
-        <div style={{fontSize:11.5,color:C.mute,margin:"0 0 6px"}}>Use the SAME name as your original picks.</div>
-        <input value={me} onChange={e=>setMe(e.target.value)} placeholder="e.g. himbo_jay" style={inp}/>
-        <div style={{height:14}}/>
-        <Label>PHONE</Label>
-        <input value={phone} onChange={e=>setPhone(e.target.value)} inputMode="tel" placeholder="(555) 123-4567" style={inp}/>
-      </div>
-    </div>
-  );
-}
-
-function R16Picker({R16,r16,setR16,lockedFor}){
-  return (
-    <div className="sec" style={{paddingTop:8}}>
-      <h2 style={{fontFamily:F_DISP,fontSize:32,margin:"2px 0",letterSpacing:.5}}>Round of 16</h2>
-      <div style={{fontSize:12.5,color:C.mute,marginBottom:14}}>Correct matchups · 10 pts each</div>
-      {R16.map((g,i)=>{
-        if(g.auto){
-          return (
-            <div key={i} style={{background:"#eef3f0",border:`1.5px solid ${C.grass}`,borderRadius:12,
-              padding:"12px 14px",marginBottom:10}}>
-              <div style={{fontSize:10,color:C.grass,fontWeight:700,letterSpacing:.5,marginBottom:4}}>AUTO-AWARDED · +10 TO EVERYONE</div>
-              <div style={{fontWeight:700,fontSize:14}}>{FLAG[g.a]} {g.a} v {g.b} {FLAG[g.b]}</div>
-              <div style={{fontSize:11.5,color:C.mute,marginTop:2}}>Already underway — no pick needed.</div>
-            </div>
-          );
-        }
-        const locked=lockedFor(g);
-        return (
-          <div key={i} style={{marginBottom:10,opacity:locked?.55:1}}>
-            <div style={{fontSize:10,color:C.mute,marginBottom:4,letterSpacing:.5}}>
-              MATCH {i+1}{locked?" · LOCKED (kicked off)":""}
-            </div>
-            <div style={{display:"flex",gap:8}}>
-              {["a","b"].map(side=>{
-                const team=g[side]; const on=r16[i]===team;
-                return (
-                  <button key={side} disabled={locked} onClick={()=>!locked&&setR16({...r16,[i]:team})} style={{
-                    flex:1,padding:"14px 8px",borderRadius:12,fontSize:14,fontWeight:on?700:600,
-                    border:`1.5px solid ${on?C.grass:C.line}`,background:on?C.grass:"#fff",
-                    color:on?"#fff":C.ink,cursor:locked?"default":"pointer",fontFamily:F_BODY,textAlign:"left",lineHeight:1.2}}>
-                    <div style={{fontSize:18}}>{FLAG[team]}</div>
-                    <div style={{marginTop:3}}>{team}</div>
-                  </button>
-                );
-              })}
-            </div>
+  if(step==="id"){
+    return (
+      <div style={{background:C.paper,minHeight:"100vh"}}>
+        <div style={wrap}>
+          <Header/>
+          {locked && <LockNote/>}
+          <div style={card}>
+            <SecLabel>WHO ARE YOU?</SecLabel>
+            <input value={me} onChange={e=>setMe(e.target.value)} placeholder="username"
+              style={inp}/>
+            <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="phone"
+              style={inp}/>
+            <button disabled={!me||!phone||locked} onClick={()=>setStep("pick")}
+              style={{...btn, opacity:(!me||!phone||locked)?.5:1}}>
+              {locked ? "Picks are locked" : "Start picking →"}
+            </button>
           </div>
-        );
-      })}
-    </div>
-  );
-}
+        </div>
+      </div>
+    );
+  }
 
-function RoundPicker({title,sub,games,picks,setPick,champion,autoNote}){
+  if(step==="done"){
+    return (
+      <div style={{background:C.paper,minHeight:"100vh"}}>
+        <div style={wrap}>
+          <Header/>
+          <div style={{...card,textAlign:"center"}}>
+            <div style={{fontSize:44,marginBottom:6}}>✅</div>
+            <div style={{fontFamily:F_DISP,fontSize:30,color:C.grass}}>PICKS IN, {me.toUpperCase()}!</div>
+            <div style={{marginTop:14,fontSize:14,lineHeight:1.6}}>
+              <div><b>{sf.sf1}</b> & <b>{sf.sf2}</b> to the final</div>
+              <div style={{marginTop:6}}>🏆 Champion: <b>{champ}</b></div>
+            </div>
+            <div style={{marginTop:16,fontSize:12,color:C.mute}}>Check the leaderboard to see how you stack up.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // step === "pick"
   return (
-    <div className="sec" style={{paddingTop:8}}>
-      <h2 style={{fontFamily:F_DISP,fontSize:32,margin:"2px 0",letterSpacing:.5}}>{title}</h2>
-      <div style={{fontSize:12.5,color:C.mute,marginBottom:6}}>{sub}</div>
-      {autoNote && <div style={{fontSize:11.5,color:C.mute,marginBottom:12,lineHeight:1.5}}>
-        For the auto-awarded R16 game, pick which of those two teams you think advances here.</div>}
-      {games.map((g,i)=>{
-        const ready=g[0]&&g[1];
-        return (
-          <div key={i} style={{marginBottom:10}}>
-            <div style={{fontSize:10,color:C.mute,marginBottom:4,letterSpacing:.5}}>{champion?"CHAMPION":"MATCH "+(i+1)}</div>
-            {!ready ? (
-              <div style={{background:"#fff",border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px",
-                fontSize:13,color:C.mute}}>Depends on earlier picks — finish those first.</div>
-            ) : (
-              <div style={{display:"flex",gap:8}}>
-                {[0,1].map(side=>{
-                  const team=g[side]; const on=picks[i]===team;
-                  return (
-                    <button key={side} onClick={()=>setPick(i,team)} style={{
-                      flex:1,padding:"14px 8px",borderRadius:12,fontSize:14,fontWeight:on?700:600,
-                      border:`1.5px solid ${on?C.grass:C.line}`,background:on?C.grass:"#fff",
-                      color:on?"#fff":C.ink,cursor:"pointer",fontFamily:F_BODY,textAlign:"left",lineHeight:1.2}}>
-                      <div style={{fontSize:18}}>{FLAG[team]||"·"}</div>
-                      <div style={{marginTop:3}}>{team}</div>
-                    </button>
-                  );
-                })}
+    <div style={{background:C.paper,minHeight:"100vh"}}>
+      <div style={wrap}>
+        <Header/>
+        {locked && <LockNote/>}
+        <div style={card}>
+          <SecLabel>SEMIFINALS · 30 pts each</SecLabel>
+          <div style={{fontSize:12,color:C.mute,marginBottom:12}}>Pick who reaches the final from each semi.</div>
+          {SF.map(g=>(
+            <div key={g.key} style={{marginBottom:16}}>
+              <div style={{fontSize:11,color:C.mute,marginBottom:5,letterSpacing:.5}}>
+                {g.key==="sf1"?"SEMIFINAL 1":"SEMIFINAL 2"}
               </div>
-            )}
-          </div>
-        );
-      })}
+              <div style={{display:"flex",gap:8}}>
+                {[g.a,g.b].map(team=>(
+                  <button key={team} disabled={locked} onClick={()=>pickSF(g.key,team)}
+                    style={teamBtn(sf[g.key]===team)}>
+                    <Flag team={team}/> <span style={{marginLeft:8}}>{team}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={card}>
+          <SecLabel>CHAMPION · 52 pts</SecLabel>
+          {finalists.length<2 ? (
+            <div style={{fontSize:13,color:C.mute}}>Pick both semifinal winners first.</div>
+          ) : (
+            <div style={{display:"flex",gap:8}}>
+              {finalists.map(team=>(
+                <button key={team} disabled={locked} onClick={()=>setChamp(team)}
+                  style={teamBtn(champ===team)}>
+                  <Flag team={team}/> <span style={{marginLeft:8}}>{team}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button disabled={!canSubmit||locked} onClick={submit}
+          style={{...btn, opacity:(!canSubmit||locked)?.5:1}}>
+          {status==="saving"?"Saving…":status==="error"?"Error — try again":"Submit picks"}
+        </button>
+      </div>
     </div>
   );
 }
 
-function Done({me,champ}){
+function Header(){
   return (
-    <div className="sec" style={{textAlign:"center",paddingTop:60}}>
-      <div style={{fontSize:60}}>✅</div>
-      <h2 style={{fontFamily:F_DISP,fontSize:36,margin:"12px 0 6px",letterSpacing:1}}>RE-PICK SAVED</h2>
-      <p style={{color:C.mute,fontSize:15,lineHeight:1.6,maxWidth:300,margin:"0 auto"}}>
-        Thanks <b style={{color:C.ink}}>{me}</b> — your R16-onward picks are in on the correct bracket.
-      </p>
-      {champ && <>
-        <div style={{fontSize:38,marginTop:14}}>{FLAG[champ]}</div>
-        <div style={{fontFamily:F_DISP,fontSize:28,marginTop:2}}>{champ}</div>
-      </>}
-      <div style={{marginTop:22,fontSize:13,color:C.mute}}>You can close this page.</div>
+    <div style={{textAlign:"center",marginBottom:16}}>
+      <div style={{fontFamily:F_DISP,fontSize:34,color:C.grass,letterSpacing:1,lineHeight:1}}>TLFKATL WORLD CUP</div>
+      <div style={{fontSize:12,color:C.mute,marginTop:2,letterSpacing:2}}>SEMIS & FINAL PICK'EM</div>
     </div>
   );
 }
+function LockNote(){
+  return <div style={{background:"#f6e6e2",border:`1px solid ${C.red}`,borderRadius:10,padding:"10px 12px",fontSize:12.5,color:C.red,marginBottom:12}}>
+    The semifinals have kicked off — picks are locked.
+  </div>;
+}
+function SecLabel({children}){ return <div style={{fontFamily:F_DISP,fontSize:18,letterSpacing:1,color:C.grassDk,marginBottom:8}}>{children}</div>; }
 
-const inp={width:"100%",padding:"13px 14px",borderRadius:11,border:`1.5px solid ${C.line}`,
-  fontSize:15,fontFamily:F_BODY,background:"#fff",color:C.ink,outline:"none"};
-function Label({children}){
-  return <div style={{fontSize:11,fontWeight:700,letterSpacing:1,color:C.mute,marginBottom:6}}>{children}</div>;
-}
-function Footer({step,canNext,back,next,submitting}){
-  return (
-    <div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:430,margin:"0 auto",
-      background:"rgba(244,239,230,.94)",backdropFilter:"blur(8px)",borderTop:`1px solid ${C.line}`,
-      padding:"12px 16px",display:"flex",gap:10}}>
-      {step!=="id" && (
-        <button onClick={back} style={{padding:"14px 18px",borderRadius:12,border:`1.5px solid ${C.line}`,
-          background:"#fff",fontWeight:700,fontSize:14,color:C.ink,cursor:"pointer"}}>Back</button>
-      )}
-      <button onClick={next} disabled={!canNext||submitting} style={{
-        flex:1,padding:"14px",borderRadius:12,border:"none",fontWeight:700,fontSize:15,
-        background:(canNext&&!submitting)?C.grass:C.line,color:(canNext&&!submitting)?"#fff":C.mute,
-        cursor:(canNext&&!submitting)?"pointer":"not-allowed",fontFamily:F_BODY}}>
-        {submitting?"Saving…": step==="id"?"Start re-pick →": step==="final"?"Lock in re-pick ✓":"Next round →"}
-      </button>
-    </div>
-  );
+const card = { background:"#fff", border:`1px solid ${C.line}`, borderRadius:14, padding:"15px 15px", marginBottom:14 };
+const inp = { display:"block", width:"100%", boxSizing:"border-box", padding:"12px 13px", marginBottom:10,
+  border:`1.5px solid ${C.line}`, borderRadius:10, fontSize:15, fontFamily:F_BODY };
+const btn = { display:"block", width:"100%", padding:"14px", background:C.grass, color:"#fff",
+  border:"none", borderRadius:12, fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:F_BODY };
+function teamBtn(active){
+  return { flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+    padding:"14px 10px", borderRadius:12, cursor:"pointer", fontSize:15, fontWeight:700,
+    fontFamily:F_BODY, border:active?`2px solid ${C.grass}`:`1.5px solid ${C.line}`,
+    background:active?"#e7f1ec":"#fff", color:C.ink };
 }
